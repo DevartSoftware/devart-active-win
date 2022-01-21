@@ -1,6 +1,6 @@
 'use strict';
 
-module.exports= () => {
+module.exports= options => {
 	if (process.platform === 'win32') {
 		return require('./lib/windows.js')(options);
 	}
@@ -8,7 +8,7 @@ module.exports= () => {
 	throw new Error('Windows only');
 }
 
-module.exports.sync = () => {
+module.exports.sync = options => {
 	if (process.platform === 'win32') {
 		return require('./lib/windows.js').sync(options);
 	}
