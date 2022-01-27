@@ -5,6 +5,8 @@
 #include <array>
 #include <UIAutomation.h>
 #include <napi.h>
+#include <comdef.h>
+
 #pragma comment(lib, "Version.lib")
 
 IUIAutomation* automation;
@@ -41,14 +43,17 @@ public:
     };
 } __initAutomation;
 
-Napi::Object result;
-Napi::Object owner;
-std::map<std::pair<__int64, std::wstring>, Napi::ObjectReference> cache;
-//std::map<std::pair<__int64, std::wstring>, Napi::Object>::iterator cacheIterator;
+struct PROCESSINFO {
+    LPWSTR title;
+    LPWSTR processName;
+    LPWSTR processPath;
+    LPWSTR url;
+    DWORD processId;
+};
 
-std::map<int, std::wstring> testMap;
+std::map<std::pair<__int64, std::wstring>, PROCESSINFO> cache;
 
-Napi::String getNapiStringFromLPWSTR(LPWSTR value, Napi::Env env) {
+Napi::String getNapiStringFromLPWSTR(Napi::Env env, LPWSTR value) {
     if (value && value[0]) {
         std::wstring wStr= value;
         std::u16string u16Str(wStr.begin(), wStr.end());
@@ -95,9 +100,7 @@ LPWSTR getProcessPath(HWND hwnd, DWORD processId) {
 LPWSTR getFileDescription(LPWSTR path)
 {
 
-    LPWSTR res = getFileNameFromPath(path);
-
-    DWORD  verSize = GetFileVersionInfoSizeW(path, NULL);
+    DWORD verSize = GetFileVersionInfoSizeW(path, NULL);
 
     if (verSize != NULL)
     {
@@ -118,7 +121,7 @@ LPWSTR getFileDescription(LPWSTR path)
 
 
                 UINT nczBufLn;
-                LPWSTR  lpBuffer;
+                LPWSTR  lpBuffer = NULL;
 
                 for (UINT i = 0; i < cnt; i++) {
                     LPWSTR strQuery = new WCHAR[MAX_PATH];
@@ -136,12 +139,12 @@ LPWSTR getFileDescription(LPWSTR path)
         delete[] verData;
     }
 
-    return NULL;
+    return getFileNameFromPath(path);
 }
 
-std::wstring EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope, IUIAutomationCondition* pCondition) {
+LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope, IUIAutomationCondition* pCondition) {
     IUIAutomationElementArray* elemArr = NULL;
-    std::wstring url = L"";
+    LPWSTR res = L"";
 
     HRESULT hr = parentElement->FindAll(scope, pCondition, &elemArr);
 
@@ -170,12 +173,10 @@ std::wstring EnumerateChildren(IUIAutomationElement* parentElement, TreeScope sc
                             pattern->Release();
                             if (SUCCEEDED(hr) && valPattern != NULL) {
                                 BSTR value;
-
                                 hr = valPattern->get_CurrentValue(&value);
                                 valPattern->Release();
                                 if SUCCEEDED(hr) {
-                                    std::wstring wStr(value, SysStringLen(value));
-                                    url = wStr;
+                                    res = (WCHAR*)_bstr_t(value);
                                     SysFreeString(value);
                                     break;
                                 }
@@ -183,8 +184,8 @@ std::wstring EnumerateChildren(IUIAutomationElement* parentElement, TreeScope sc
                         }
                     }
                     else {
-                        url = EnumerateChildren(elem, scope, pCondition);
-                        if (!url.empty()) {
+                        res = EnumerateChildren(elem, scope, pCondition);
+                        if (res && res[0]) {
                             break;
                         }
                     }
@@ -196,14 +197,8 @@ std::wstring EnumerateChildren(IUIAutomationElement* parentElement, TreeScope sc
         elemArr->Release();
     }
 
-    return url;
+    return res;
 }
-
-struct PROCESSINFO {
-    LPWSTR processName;
-    LPWSTR processPath;
-} *processInfo;
-
 
 BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
 
@@ -224,10 +219,10 @@ BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-Napi::String getBrowserUrl(HWND hwnd, Napi::Env env, LPWSTR processName) {
-
+LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
+    
     IUIAutomationElement* elem = NULL;
-    Napi::String url = Napi::String::New(env, "");
+    LPWSTR url = L"";
 
     std::wstring wStr = processName;
     std::array<std::wstring, 5>  arr = { L"Google Chrome", L"Microsoft Edge", L"Firefox", L"Opera Internet Browser", L"Vivaldi" };
@@ -245,24 +240,33 @@ Napi::String getBrowserUrl(HWND hwnd, Napi::Env env, LPWSTR processName) {
 
         CoUninitialize();
 
-        Napi::TypeError::New(env, "Error on Create UIAutomation").ThrowAsJavaScriptException();
-        Napi::String::New(env, "");
+        return url;
     }
 
     HRESULT hr = automation->ElementFromHandle(hwnd, &elem);
     if (SUCCEEDED(hr) && elem)
     {
-        std::wstring wStr = EnumerateChildren(elem, (TreeScope)(TreeScope::TreeScope_Element | TreeScope::TreeScope_Children), condition);
-        if (!wStr.empty()) {
-            std::u16string str(wStr.begin(), wStr.end());
-            url = Napi::String::New(env, str);
-        }
+        url = EnumerateChildren(elem, (TreeScope)(TreeScope::TreeScope_Element | TreeScope::TreeScope_Children), condition);
     }
     if (elem) {
         elem->Release();
     }
 
     return url;
+}
+
+Napi::Object makeResult(Napi::Env env, PROCESSINFO processInfo) {
+    Napi::Object result = Napi::Object::New(env);
+    result.Set(Napi::String::New(env, "title"), getNapiStringFromLPWSTR(env, processInfo.title));
+    result.Set(Napi::String::New(env, "platform"), Napi::String::New(env, "windows"));
+    result.Set(Napi::String::New(env, "url"), getNapiStringFromLPWSTR(env, processInfo.url));
+    Napi::Object owner = Napi::Object::New(env);
+    owner.Set(Napi::String::New(env, "processId"), Napi::Number::New(env, processInfo.processId));
+    owner.Set(Napi::String::New(env, "path"), getNapiStringFromLPWSTR(env, processInfo.processPath));
+    owner.Set(Napi::String::New(env, "name"), getNapiStringFromLPWSTR(env, processInfo.processName));
+    result.Set(Napi::String::New(env, "owner"), owner);
+
+    return result;
 }
 
 Napi::Value windows(const Napi::CallbackInfo& info) {
@@ -280,8 +284,8 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
-    LPWSTR windowTitle = new WCHAR[windowTitleLength];
-    GetWindowTextW(hwnd, windowTitle, windowTitleLength + 2);
+    LPWSTR windowTitle = new WCHAR[windowTitleLength + 1];
+    GetWindowTextW(hwnd, windowTitle, windowTitleLength + 1);
     if (!windowTitle || !windowTitle[0]) {
         Napi::TypeError::New(env, "Unable to get window title").ThrowAsJavaScriptException();
         return env.Null();
@@ -294,37 +298,29 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
     }
 
 
-    std::wstring tmpStr = windowTitle;
-    auto cacheIterator = cache.find(std::make_pair(processId, tmpStr));
+    auto cacheIterator = cache.find(std::make_pair(processId, windowTitle));
     if (cacheIterator != cache.end()) {
-        return cacheIterator->second.Value();
+        return  makeResult(env, cacheIterator->second);
     }
 
-    result = Napi::Object::New(env);
-    result.Set(Napi::String::New(env, "title"), getNapiStringFromLPWSTR(windowTitle, env));
-    result.Set(Napi::String::New(env, "platform"), Napi::String::New(env, "windows"));
+    LPWSTR processPath = getProcessPath(hwnd, processId);
+    PROCESSINFO processInfo = { };
+    processInfo.title = windowTitle;
+    processInfo.processPath = getProcessPath(hwnd, processId);
+    processInfo.processName = getFileDescription(processInfo.processPath);
+    processInfo.processId = processId;
+    processInfo.url = getBrowserUrl(hwnd, processInfo.processName);
 
-    owner = Napi::Object::New(env);
-    owner.Set(Napi::String::New(env, "processId"), Napi::Number::New(env, processId));
-
-    processInfo = new PROCESSINFO();
-    processInfo->processPath = getProcessPath(hwnd, processId);
-    processInfo->processName = getFileDescription(processInfo->processPath);
-    LPWSTR fileName = getFileNameFromPath(processInfo->processPath);
+    LPWSTR fileName = getFileNameFromPath(processInfo.processPath);
 
     if (wcscmp(fileName, L"ApplicationFrameHost.exe") == 0) {
         EnumChildWindows(hwnd, enumChildWindowsProc, (LPARAM)&processInfo);
     }
 
-    owner.Set(Napi::String::New(env, "path"), getNapiStringFromLPWSTR(processInfo->processPath, env));
-    owner.Set(Napi::String::New(env, "name"), getNapiStringFromLPWSTR(processInfo->processName, env));
-    result.Set(Napi::String::New(env, "owner"), owner);
-    result.Set(Napi::String::New(env, "url"), getBrowserUrl(hwnd, env, processInfo->processName));
-    cache[std::make_pair(processId, tmpStr)] = Napi::ObjectReference::New(result);
-
-    return result;;
+    cache[std::make_pair(processId, windowTitle)] = processInfo;
+    
+    return makeResult(env, processInfo);;
 }
-
 
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
