@@ -12,6 +12,14 @@
 IUIAutomation* automation;
 IUIAutomationCondition* condition;
 
+struct PROCESSINFO {
+    LPWSTR title;
+    LPWSTR processName;
+    LPWSTR processPath;
+    LPWSTR url;
+    DWORD processId;
+} processInfo = {};
+
 class InitAutomation {
 public:  
     InitAutomation() { };
@@ -43,16 +51,6 @@ public:
     };
 } __initAutomation;
 
-struct PROCESSINFO {
-    LPWSTR title;
-    LPWSTR processName;
-    LPWSTR processPath;
-    LPWSTR url;
-    DWORD processId;
-};
-
-std::map<std::pair<__int64, std::wstring>, PROCESSINFO> cache;
-
 Napi::String getNapiStringFromLPWSTR(Napi::Env env, LPWSTR value) {
     if (value && value[0]) {
         std::wstring wStr= value;
@@ -61,7 +59,6 @@ Napi::String getNapiStringFromLPWSTR(Napi::Env env, LPWSTR value) {
     }
 
     return Napi::String::New(env, "");
-
 }
 
 LPWSTR getFileNameFromPath(LPWSTR path) {
@@ -99,7 +96,6 @@ LPWSTR getProcessPath(HWND hwnd, DWORD processId) {
 
 LPWSTR getFileDescription(LPWSTR path)
 {
-
     DWORD verSize = GetFileVersionInfoSizeW(path, NULL);
 
     if (verSize != NULL)
@@ -114,12 +110,8 @@ LPWSTR getFileDescription(LPWSTR path)
                 WORD wCodePage;
             } *lang;
 
-
             if (VerQueryValueW(verData, L"\\VarFileInfo\\Translation", (LPVOID*)&lang, &cnt)) {
-
                 UINT nCnt = cnt / sizeof(struct LANGANDCODEPAGE);
-
-
                 UINT nczBufLn;
                 LPWSTR  lpBuffer = NULL;
 
@@ -142,11 +134,11 @@ LPWSTR getFileDescription(LPWSTR path)
     return getFileNameFromPath(path);
 }
 
-LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope, IUIAutomationCondition* pCondition) {
+LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
     IUIAutomationElementArray* elemArr = NULL;
     LPWSTR res = L"";
 
-    HRESULT hr = parentElement->FindAll(scope, pCondition, &elemArr);
+    HRESULT hr = parentElement->FindAll(scope, condition, &elemArr);
 
     if (SUCCEEDED(hr) && elemArr) {
         int length = 0;
@@ -184,7 +176,7 @@ LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope, I
                         }
                     }
                     else {
-                        res = EnumerateChildren(elem, scope, pCondition);
+                        res = EnumerateChildren(elem, scope);
                         if (res && res[0]) {
                             break;
                         }
@@ -201,14 +193,12 @@ LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope, I
 }
 
 BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
-
     DWORD processId = getProcessId(hwnd);
 
     LPWSTR appPath = getProcessPath(hwnd, processId);
     if (!appPath || !appPath[0]) {
         return FALSE;
     }
-
 
     if (wcscmp(appPath, ((PROCESSINFO*)lParam)->processPath) != 0) {
         ((PROCESSINFO*)lParam)->processPath = appPath;
@@ -220,12 +210,22 @@ BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
 }
 
 LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
-    
     IUIAutomationElement* elem = NULL;
     LPWSTR url = L"";
 
     std::wstring wStr = processName;
-    std::array<std::wstring, 5>  arr = { L"Google Chrome", L"Microsoft Edge", L"Firefox", L"Opera Internet Browser", L"Vivaldi" };
+    std::array<std::wstring, 9>  arr = {
+        L"Google Chrome",
+        L"Microsoft Edge",
+        L"Firefox",
+        L"Opera Internet Browser",
+        L"Vivaldi",
+        L"Brave Browser",
+        L"Ghost Browser",
+        L"Wavebox",
+        L"Sidekick"
+    };
+
     if (std::find(arr.begin(), arr.end(), wStr) == arr.end()) {
         return url;
     }
@@ -246,7 +246,7 @@ LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
     HRESULT hr = automation->ElementFromHandle(hwnd, &elem);
     if (SUCCEEDED(hr) && elem)
     {
-        url = EnumerateChildren(elem, (TreeScope)(TreeScope::TreeScope_Element | TreeScope::TreeScope_Children), condition);
+        url = EnumerateChildren(elem, (TreeScope)(TreeScope::TreeScope_Element | TreeScope::TreeScope_Children));
     }
     if (elem) {
         elem->Release();
@@ -279,17 +279,8 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
     }
 
     int windowTitleLength = GetWindowTextLengthW(hwnd);
-    if (windowTitleLength <= 0) {
-        Napi::TypeError::New(env, "Unable to get window title").ThrowAsJavaScriptException();
-        return env.Null();
-    }
-
     LPWSTR windowTitle = new WCHAR[windowTitleLength + 1];
     GetWindowTextW(hwnd, windowTitle, windowTitleLength + 1);
-    if (!windowTitle || !windowTitle[0]) {
-        Napi::TypeError::New(env, "Unable to get window title").ThrowAsJavaScriptException();
-        return env.Null();
-    }
 
     DWORD processId = getProcessId(hwnd);
     if (processId <= 0) {
@@ -297,29 +288,25 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
+    if (processId != processInfo.processId || wcscmp(windowTitle, processInfo.title) != 0) {
+        LPWSTR processPath = getProcessPath(hwnd, processId);
+        processInfo.title = windowTitle;
+        processInfo.processPath = getProcessPath(hwnd, processId);
+        processInfo.processName = getFileDescription(processInfo.processPath);
+        processInfo.processId = processId;
+        processInfo.url = getBrowserUrl(hwnd, processInfo.processName);
 
-    auto cacheIterator = cache.find(std::make_pair(processId, windowTitle));
-    if (cacheIterator != cache.end()) {
-        return  makeResult(env, cacheIterator->second);
+        LPWSTR fileName = getFileNameFromPath(processInfo.processPath);
+        if (wcscmp(fileName, L"ApplicationFrameHost.exe") == 0) {
+            EnumChildWindows(hwnd, enumChildWindowsProc, (LPARAM)&processInfo);
+        }
+
+        if (!processInfo.title || !processInfo.title[0]) {
+            processInfo.title = processInfo.processName;
+        }
     }
-
-    LPWSTR processPath = getProcessPath(hwnd, processId);
-    PROCESSINFO processInfo = { };
-    processInfo.title = windowTitle;
-    processInfo.processPath = getProcessPath(hwnd, processId);
-    processInfo.processName = getFileDescription(processInfo.processPath);
-    processInfo.processId = processId;
-    processInfo.url = getBrowserUrl(hwnd, processInfo.processName);
-
-    LPWSTR fileName = getFileNameFromPath(processInfo.processPath);
-
-    if (wcscmp(fileName, L"ApplicationFrameHost.exe") == 0) {
-        EnumChildWindows(hwnd, enumChildWindowsProc, (LPARAM)&processInfo);
-    }
-
-    cache[std::make_pair(processId, windowTitle)] = processInfo;
     
-    return makeResult(env, processInfo);;
+    return makeResult(env, processInfo);
 }
 
 
