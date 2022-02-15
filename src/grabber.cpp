@@ -115,7 +115,7 @@ LPWSTR getFileDescription(LPWSTR path)
                 UINT nczBufLn;
                 LPWSTR  lpBuffer = NULL;
 
-                for (UINT i = 0; i < cnt; i++) {
+                for (UINT i = 0; i < nCnt; i++) {
                     LPWSTR strQuery = new WCHAR[MAX_PATH];
                     wsprintfW(strQuery, L"\\StringFileInfo\\%04x%04x\\FileDescription", lang[i].wLanguage, lang[i].wCodePage);
                     if (VerQueryValueW(verData, strQuery, (VOID**)&lpBuffer, &nczBufLn))
