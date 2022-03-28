@@ -281,6 +281,10 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
     int windowTitleLength = GetWindowTextLengthW(hwnd);
     LPWSTR windowTitle = new WCHAR[windowTitleLength + 1];
     GetWindowTextW(hwnd, windowTitle, windowTitleLength + 1);
+    if (windowTitle == NULL) {
+        return env.Null();
+    }
+
 
     DWORD processId = getProcessId(hwnd);
     if (processId <= 0) {
@@ -289,10 +293,15 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
     }
 
     if (processId != processInfo.processId || wcscmp(windowTitle, processInfo.title) != 0) {
-        LPWSTR processPath = getProcessPath(hwnd, processId);
         processInfo.title = windowTitle;
         processInfo.processPath = getProcessPath(hwnd, processId);
+        if (processInfo.processPath == NULL) {
+            return env.Null();
+        }
         processInfo.processName = getFileDescription(processInfo.processPath);
+        if (processInfo.processName == NULL) {
+            return env.Null();
+        }
         processInfo.processId = processId;
         processInfo.url = getBrowserUrl(hwnd, processInfo.processName);
 
