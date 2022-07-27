@@ -274,7 +274,6 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
 
     HWND hwnd = GetForegroundWindow();
     if (hwnd == NULL) {
-        Napi::TypeError::New(env, "Unable to get window handle").ThrowAsJavaScriptException();
         return env.Null();
     }
 
