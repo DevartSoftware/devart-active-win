@@ -1,6 +1,6 @@
 {
 	"name": "devart-active-win",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Getting information about the active window and process",
 	"main": "index.js",
 	"scripts": {
@@ -8,7 +8,7 @@
 	},
 	"author": "AlexP",
 	"dependencies": {
-		"node-addon-api": "^4.2.0",
-		"node-gyp": "^8.4.1"
+		"node-addon-api": "^5.1.0",
+		"node-gyp": "^9.3.0"
 	}
 }
