@@ -11,5 +11,5 @@
 		"node-addon-api": "^5.1.0",
 		"node-gyp": "^9.3.0"
 	},
-    "os": [ "win32" ]
+	"os": [ "win32" ]
 }

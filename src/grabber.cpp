@@ -223,7 +223,8 @@ LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
         L"Brave Browser",
         L"Ghost Browser",
         L"Wavebox",
-        L"Sidekick"
+        L"Sidekick",
+        L"Orbita-Browser"
     };
 
     if (std::find(arr.begin(), arr.end(), wStr) == arr.end()) {
