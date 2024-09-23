@@ -1,6 +1,6 @@
 {
 	"name": "devart-active-win",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Getting information about the active window and process",
 	"main": "index.js",
 	"scripts": {
