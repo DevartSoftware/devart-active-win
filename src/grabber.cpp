@@ -214,7 +214,7 @@ LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
     LPWSTR url = L"";
 
     std::wstring wStr = processName;
-    std::array<std::wstring, 9>  arr = {
+    std::array<std::wstring, 10>  arr = {
         L"Google Chrome",
         L"Microsoft Edge",
         L"Firefox",
