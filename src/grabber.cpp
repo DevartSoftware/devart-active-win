@@ -136,7 +136,7 @@ LPWSTR getFileDescription(LPWSTR path)
 
 LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
     IUIAutomationElementArray* elemArr = NULL;
-    LPWSTR res = L"";
+    LPWSTR res = (LPWSTR)L"";
 
     HRESULT hr = parentElement->FindAll(scope, condition, &elemArr);
 
@@ -211,7 +211,7 @@ BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
 
 LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
     IUIAutomationElement* elem = NULL;
-    LPWSTR url = L"";
+    LPWSTR url = (LPWSTR)L"";
 
     std::wstring wStr = processName;
     std::array<std::wstring, 10>  arr = {
