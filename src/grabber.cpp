@@ -3,6 +3,8 @@
 #include <map>
 #include <iterator>
 #include <array>
+#include <string>
+#include <vector>
 #include <UIAutomation.h>
 #include <napi.h>
 #include <comdef.h>
@@ -13,10 +15,10 @@ IUIAutomation* automation;
 IUIAutomationCondition* condition;
 
 struct PROCESSINFO {
-    LPWSTR title;
-    LPWSTR processName;
-    LPWSTR processPath;
-    LPWSTR url;
+    std::wstring title;
+    std::wstring processName;
+    std::wstring processPath;
+    std::wstring url;
     DWORD processId;
 } processInfo = {};
 
@@ -51,23 +53,17 @@ public:
     };
 } __initAutomation;
 
-Napi::String getNapiStringFromLPWSTR(Napi::Env env, LPWSTR value) {
-    if (value && value[0]) {
-        std::wstring wStr= value;
-        std::u16string u16Str(wStr.begin(), wStr.end());
+Napi::String getNapiString(Napi::Env env, const std::wstring& value) {
+    if (!value.empty()) {
+        std::u16string u16Str(value.begin(), value.end());
         return Napi::String::New(env, u16Str);
     }
 
     return Napi::String::New(env, "");
 }
 
-LPWSTR getFileNameFromPath(LPWSTR path) {
-    std::wstring appPath = path;
-    std::wstring fileName = appPath.substr(appPath.find_last_of(L"/\\") + 1).c_str();
-    LPWSTR res = new WCHAR[fileName.size() + 2];
-    copy(fileName.begin(), fileName.end(), res);
-    res[fileName.size()] = 0;
-    return res;
+std::wstring getFileNameFromPath(const std::wstring& path) {
+    return path.substr(path.find_last_of(L"/\\") + 1);
 }
 
 DWORD getProcessId(HWND hwnd) {
@@ -77,32 +73,32 @@ DWORD getProcessId(HWND hwnd) {
     return processId;
 }
 
-LPWSTR getProcessPath(HWND hwnd, DWORD processId) {
+std::wstring getProcessPath(HWND hwnd, DWORD processId) {
     HANDLE windowsHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
     if (!windowsHandle) {
-        return NULL;
+        return L"";
     }
 
+    WCHAR path[MAX_PATH];
     DWORD maxPath = MAX_PATH;
-    LPWSTR path = new WCHAR[MAX_PATH];
-    QueryFullProcessImageNameW(windowsHandle, 0, path, &maxPath);
+    BOOL ok = QueryFullProcessImageNameW(windowsHandle, 0, path, &maxPath);
     CloseHandle(windowsHandle);
-    if (!path || !path[0]) {
-        return NULL;
+    if (!ok) {
+        return L"";
     }
 
-    return path;
+    return std::wstring(path, maxPath);
 }
 
-LPWSTR getFileDescription(LPWSTR path)
+std::wstring getFileDescription(const std::wstring& path)
 {
-    DWORD verSize = GetFileVersionInfoSizeW(path, NULL);
+    DWORD verSize = GetFileVersionInfoSizeW(path.c_str(), NULL);
 
     if (verSize != NULL)
     {
-        LPWSTR verData = new WCHAR[verSize];
+        std::vector<BYTE> verData(verSize);
 
-        if (GetFileVersionInfoW(path, 0, verSize, verData))
+        if (GetFileVersionInfoW(path.c_str(), 0, verSize, verData.data()))
         {
             UINT cnt;
             struct LANGANDCODEPAGE {
@@ -110,33 +106,31 @@ LPWSTR getFileDescription(LPWSTR path)
                 WORD wCodePage;
             } *lang;
 
-            if (VerQueryValueW(verData, L"\\VarFileInfo\\Translation", (LPVOID*)&lang, &cnt)) {
+            if (VerQueryValueW(verData.data(), L"\\VarFileInfo\\Translation", (LPVOID*)&lang, &cnt)) {
                 UINT nCnt = cnt / sizeof(struct LANGANDCODEPAGE);
                 UINT nczBufLn;
                 LPWSTR  lpBuffer = NULL;
 
                 for (UINT i = 0; i < nCnt; i++) {
-                    LPWSTR strQuery = new WCHAR[MAX_PATH];
+                    WCHAR strQuery[MAX_PATH];
                     wsprintfW(strQuery, L"\\StringFileInfo\\%04x%04x\\FileDescription", lang[i].wLanguage, lang[i].wCodePage);
-                    if (VerQueryValueW(verData, strQuery, (VOID**)&lpBuffer, &nczBufLn))
+                    if (VerQueryValueW(verData.data(), strQuery, (VOID**)&lpBuffer, &nczBufLn))
                     {
                         if (lpBuffer && lpBuffer[0]) {
-                            return lpBuffer;
+                            return lpBuffer; // lpBuffer points into verData, copy it before verData is freed
                         }
                     }
                 }
             }
         }
-
-        delete[] verData;
     }
 
     return getFileNameFromPath(path);
 }
 
-LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
+std::wstring EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
     IUIAutomationElementArray* elemArr = NULL;
-    LPWSTR res = (LPWSTR)L"";
+    std::wstring res;
 
     HRESULT hr = parentElement->FindAll(scope, condition, &elemArr);
 
@@ -150,6 +144,13 @@ LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
                 
                 hr = elemArr->GetElement(i, &elem);
                 if (SUCCEEDED(hr) && elem) {
+                    // TD-1755: Firefox keeps documents of background tabs in the UIA tree marked as offscreen
+                    BOOL offscreen = FALSE;
+                    if (SUCCEEDED(elem->get_CurrentIsOffscreen(&offscreen)) && offscreen) {
+                        elem->Release();
+                        continue;
+                    }
+
                     CONTROLTYPEID contolType = 0;
                     
                     hr = elem->get_CurrentControlType(&contolType);
@@ -168,7 +169,9 @@ LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
                                 hr = valPattern->get_CurrentValue(&value);
                                 valPattern->Release();
                                 if SUCCEEDED(hr) {
-                                    res = (WCHAR*)_bstr_t(value);
+                                    if (value) {
+                                        res = value;
+                                    }
                                     SysFreeString(value);
                                     break;
                                 }
@@ -177,7 +180,8 @@ LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
                     }
                     else {
                         res = EnumerateChildren(elem, scope);
-                        if (res && res[0]) {
+                        elem->Release();
+                        if (!res.empty()) {
                             break;
                         }
                     }
@@ -195,12 +199,12 @@ LPWSTR EnumerateChildren(IUIAutomationElement* parentElement, TreeScope scope) {
 BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
     DWORD processId = getProcessId(hwnd);
 
-    LPWSTR appPath = getProcessPath(hwnd, processId);
-    if (!appPath || !appPath[0]) {
+    std::wstring appPath = getProcessPath(hwnd, processId);
+    if (appPath.empty()) {
         return FALSE;
     }
 
-    if (wcscmp(appPath, ((PROCESSINFO*)lParam)->processPath) != 0) {
+    if (appPath != ((PROCESSINFO*)lParam)->processPath) {
         ((PROCESSINFO*)lParam)->processPath = appPath;
         ((PROCESSINFO*)lParam)->processName = getFileDescription(appPath);
         return FALSE;
@@ -209,11 +213,10 @@ BOOL CALLBACK enumChildWindowsProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
+std::wstring getBrowserUrl(HWND hwnd, const std::wstring& processName) {
     IUIAutomationElement* elem = NULL;
-    LPWSTR url = (LPWSTR)L"";
+    std::wstring url;
 
-    std::wstring wStr = processName;
     std::array<std::wstring, 10>  arr = {
         L"Google Chrome",
         L"Microsoft Edge",
@@ -227,7 +230,7 @@ LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
         L"Orbita-Browser"
     };
 
-    if (std::find(arr.begin(), arr.end(), wStr) == arr.end()) {
+    if (std::find(arr.begin(), arr.end(), processName) == arr.end()) {
         return url;
     }
 
@@ -256,15 +259,15 @@ LPWSTR getBrowserUrl(HWND hwnd, LPWSTR processName) {
     return url;
 }
 
-Napi::Object makeResult(Napi::Env env, PROCESSINFO processInfo) {
+Napi::Object makeResult(Napi::Env env, const PROCESSINFO& processInfo) {
     Napi::Object result = Napi::Object::New(env);
-    result.Set(Napi::String::New(env, "title"), getNapiStringFromLPWSTR(env, processInfo.title));
+    result.Set(Napi::String::New(env, "title"), getNapiString(env, processInfo.title));
     result.Set(Napi::String::New(env, "platform"), Napi::String::New(env, "windows"));
-    result.Set(Napi::String::New(env, "url"), getNapiStringFromLPWSTR(env, processInfo.url));
+    result.Set(Napi::String::New(env, "url"), getNapiString(env, processInfo.url));
     Napi::Object owner = Napi::Object::New(env);
     owner.Set(Napi::String::New(env, "processId"), Napi::Number::New(env, processInfo.processId));
-    owner.Set(Napi::String::New(env, "path"), getNapiStringFromLPWSTR(env, processInfo.processPath));
-    owner.Set(Napi::String::New(env, "name"), getNapiStringFromLPWSTR(env, processInfo.processName));
+    owner.Set(Napi::String::New(env, "path"), getNapiString(env, processInfo.processPath));
+    owner.Set(Napi::String::New(env, "name"), getNapiString(env, processInfo.processName));
     result.Set(Napi::String::New(env, "owner"), owner);
 
     return result;
@@ -279,12 +282,9 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
     }
 
     int windowTitleLength = GetWindowTextLengthW(hwnd);
-    LPWSTR windowTitle = new WCHAR[windowTitleLength + 1];
-    GetWindowTextW(hwnd, windowTitle, windowTitleLength + 1);
-    if (windowTitle == NULL) {
-        return env.Null();
-    }
-
+    std::wstring windowTitle(windowTitleLength, L'\0');
+    windowTitleLength = GetWindowTextW(hwnd, windowTitle.data(), windowTitleLength + 1);
+    windowTitle.resize(windowTitleLength);
 
     DWORD processId = getProcessId(hwnd);
     if (processId <= 0) {
@@ -292,25 +292,21 @@ Napi::Value windows(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
-    if (processId != processInfo.processId || wcscmp(windowTitle, processInfo.title) != 0) {
+    if (processId != processInfo.processId || windowTitle != processInfo.title) {
         processInfo.title = windowTitle;
         processInfo.processPath = getProcessPath(hwnd, processId);
-        if (processInfo.processPath == NULL) {
+        if (processInfo.processPath.empty()) {
             return env.Null();
         }
         processInfo.processName = getFileDescription(processInfo.processPath);
-        if (processInfo.processName == NULL) {
-            return env.Null();
-        }
         processInfo.processId = processId;
         processInfo.url = getBrowserUrl(hwnd, processInfo.processName);
 
-        LPWSTR fileName = getFileNameFromPath(processInfo.processPath);
-        if (wcscmp(fileName, L"ApplicationFrameHost.exe") == 0) {
+        if (getFileNameFromPath(processInfo.processPath) == L"ApplicationFrameHost.exe") {
             EnumChildWindows(hwnd, enumChildWindowsProc, (LPARAM)&processInfo);
         }
 
-        if (!processInfo.title || !processInfo.title[0]) {
+        if (processInfo.title.empty()) {
             processInfo.title = processInfo.processName;
         }
     }
